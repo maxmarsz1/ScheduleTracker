@@ -1,7 +1,6 @@
-use crate::drive::{self, CustomDrive};
-use std::{collections::HashMap, fs::File, io};
-
-use chrono::NaiveDate;
+use crate::drive::CustomDrive;
+use std::{fs::File, io};
+use rand::Rng;
 
 pub struct Tracker{
     pub last_filename: String,
@@ -11,40 +10,45 @@ pub struct Tracker{
 impl Tracker{
     pub fn new() -> Tracker{
         let drive = CustomDrive::new("./credentials.json", "./client_secrets.json", None);
-        let downloaded_files = std::fs::read_dir("./downloads")
+
+        let mut entries = std::fs::read_dir("./downloads")
             .expect("Failed to read directory")
             .filter_map(|entry| entry.ok())
-            .map(|entry| entry.file_name().into_string().unwrap())
-            .collect::<Vec<String>>();
-        println!("Downloaded files: {:?}", downloaded_files);
+            .collect::<Vec<std::fs::DirEntry>>();
+        entries.sort_by(|a, b| b.metadata().unwrap().modified().unwrap().cmp(&a.metadata().unwrap().modified().unwrap().clone()));
+        let last_modified_file = entries.first().expect("No files in ./downloads directory").file_name().into_string().unwrap();
 
-        let file_url = get_file_url("https://it.pk.edu.pl/studenci/na-studiach/rozklady-zajec/");
-        let filename = file_url.split('/').last().expect("Failed to find filename");
-        let last_downloaded_filename = downloaded_files.iter().find(|downloaded_filename| *downloaded_filename == filename);
-        match last_downloaded_filename {
-            Some(last_filename) => Tracker{last_filename:last_filename.clone(), drive},
-            None => {
-                download_file(&file_url, filename, std::path::Path::new("./downloads"));
-                Tracker{last_filename: filename.to_string(), drive}
-            },
+        println!("Found latest schedule: {}", last_modified_file);
+
+        Tracker{last_filename: last_modified_file, drive}
+    }
+
+    pub fn run(&mut self){
+        loop {
+            self.download_if_new_available();
+            let sleep_time = rand::thread_rng().gen_range(1..100);
+            std::thread::sleep(std::time::Duration::from_secs(300 + sleep_time as u64));
         }
     }
 
-    // pub fn download_if_new_available(&self) {
-    //     let url = get_file_url("https://it.pk.edu.pl/studenci/na-studiach/rozklady-zajec/");
-    //     let filename = url.split('/').last().expect("Failed to find filename");
-    //     if filename != self.last_filename {
-    //         download_file(&url, filename, &std::path::Path::new("./downloads"));
-    //         self.last_filename = filename.to_string();
-    //         // self.drive.upload_file(&filename);
-    //     }
-    // }
-
-
-
-
-
+    pub fn download_if_new_available(&mut self) {
+        let url = get_file_url("https://it.pk.edu.pl/studenci/na-studiach/rozklady-zajec/");
+        let filename = url.split('/').last().expect("Failed to find filename");
+        if filename != self.last_filename {
+            println!("Found new schedule");
+            download_file(&url, filename, std::path::Path::new("./downloads"));
+            if self.drive.update_file("14IfrHlUTIMlLfGinlIz6cSvhlnLuW6P_", filename).is_ok(){
+                self.last_filename = filename.to_string();
+                println!("Updated new schedule");
+            } else {
+                println!("Failed to update schedule");
+            }
+        } else {
+            println!("Schedule up to date");
+        }
+    }
 }
+
 
 pub fn get_file_url(url: &str) -> String {
     let response = reqwest::blocking::get(url).expect("Failed to connect to server");
